@@ -138,3 +138,8 @@ results/*
 .log/*
 .deprecated/*
 .debug/*
+#<RP Default Gitignore Start>
+*.pyc
+*.swp
+*.un~
+#<RP Default Gitignore End>
