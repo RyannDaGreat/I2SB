@@ -1,0 +1,1 @@
+python sample_ryan.py --ckpt sr4x-pool --n-gpu-per-node 1 --dataset-dir untracked/imagenet_stuff --batch-size 1 --nfe 50

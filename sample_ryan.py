@@ -31,6 +31,9 @@ from i2sb import ckpt_util
 import colored_traceback.always
 from ipdb import set_trace as debug
 
+import rp
+from icecream import ic
+
 RESULT_DIR = Path("results")
 
 def set_seed(seed):
@@ -111,7 +114,9 @@ def get_recon_imgs_fn(opt, nfe):
     return recon_imgs_fn
 
 def compute_batch(ckpt_opt, corrupt_type, corrupt_method, out):
+    print(f"compute_batch: corrupt_type={corrupt_type}")
     if "inpaint" in corrupt_type:
+        assert False, 'Ryan: I dont use things with masks'
         clean_img, y, mask = out
         corrupt_img = clean_img * (1. - mask) + mask
         x1          = clean_img * (1. - mask) + mask * torch.randn_like(clean_img)
@@ -119,7 +124,19 @@ def compute_batch(ckpt_opt, corrupt_type, corrupt_method, out):
         clean_img, corrupt_img, y = out
         mask = None
     else:
-        clean_img, y = out
+        # clean_img, y = out
+        clean_img, y = out, None
+
+        rp.fansi_print(f"compute_batch: clean_img = {clean_img}",'blue','bold')
+        # assert isinstance(clean_img, str), clean_img
+        clean_img = rp.download_files_to_cache(clean_img)
+        clean_img = rp.load_images(clean_img, use_cache=True)
+        clean_img = rp.cv_resize_images(clean_img,size=(256,256))
+        clean_img = rp.as_float_images(clean_img)
+        clean_img = rp.as_rgb_images(clean_img)
+        clean_img = rp.as_torch_images(clean_img)
+        clean_img = clean_img * 2 - 1
+
         mask = None
         corrupt_img = corrupt_method(clean_img.to(opt.device))
         x1 = corrupt_img.to(opt.device)
@@ -139,11 +156,16 @@ def main(opt):
     corrupt_type = ckpt_opt.corrupt
     nfe = opt.nfe or ckpt_opt.interval-1
 
-    # build corruption method
+    # # build corruption method
     corrupt_method = build_corruption(opt, log, corrupt_type=corrupt_type)
 
-    # build imagenet val dataset
-    val_dataset = build_val_dataset(opt, log, corrupt_type)
+    # # build imagenet val dataset
+    # val_dataset = build_val_dataset(opt, log, corrupt_type)
+    val_dataset = [
+        'https://upload.wikimedia.org/wikipedia/commons/6/67/Kim_Petras_%2842743719761%29.jpg',
+        'https://media.npr.org/assets/img/2023/07/06/kim-petras---credit-luke-gilford_wide-8bbaafdd1a30bd518d7da2791a81179de2099127.jpg',
+        'https://static.wikia.nocookie.net/kim-petras/images/1/12/F5XuxfnbwAAgu8L.jpg/revision/latest?cb=20231117000449',
+    ]
     n_samples = len(val_dataset)
 
     # build dataset per gpu and loader
@@ -166,11 +188,17 @@ def main(opt):
     log.info(f"Recon images will be saved to {recon_imgs_fn}!")
 
     recon_imgs = []
+    corrupt_imgs = []
     ys = []
     num = 0
     for loader_itr, out in enumerate(val_loader):
 
         corrupt_img, x1, mask, cond, y = compute_batch(ckpt_opt, corrupt_type, corrupt_method, out)
+
+
+        assert y is None, 'Ryan: I dont care about labels'
+        del y
+        corrupt_imgs.append(corrupt_img)
 
         xs, _ = runner.ddpm_sampling(
             ckpt_opt, x1, mask=mask, cond=cond, clip_denoise=opt.clip_denoise, nfe=nfe, verbose=opt.n_gpu_per_node==1
@@ -189,9 +217,9 @@ def main(opt):
         gathered_recon_img = collect_all_subset(recon_img, log)
         recon_imgs.append(gathered_recon_img)
 
-        y = y.to(opt.device)
-        gathered_y = collect_all_subset(y, log)
-        ys.append(gathered_y)
+        # y = y.to(opt.device)
+        # gathered_y = collect_all_subset(y, log)
+        # ys.append(gathered_y)
 
         num += len(gathered_recon_img)
         log.info(f"Collected {num} recon images!")
@@ -199,15 +227,28 @@ def main(opt):
 
     del runner
 
-    arr = torch.cat(recon_imgs, axis=0)[:n_samples]
-    label_arr = torch.cat(ys, axis=0)[:n_samples]
+    arr         = torch.cat(recon_imgs  , axis=0)#[:n_samples]
+    arr_corrupt = torch.cat(corrupt_imgs, axis=0)#[:n_samples]
+
+    ic(arr.shape, arr_corrupt.shape)
+    # label_arr = torch.cat(ys, axis=0)[:n_samples]
 
     if opt.global_rank == 0:
-        torch.save({"arr": arr, "label_arr": label_arr}, recon_imgs_fn)
+        # torch.save({"arr": arr, "label_arr": label_arr}, recon_imgs_fn)
+        torch.save({"arr": arr}, recon_imgs_fn)
         log.info(f"Save at {recon_imgs_fn}")
+
+        saved_paths = rp.save_images(
+            rp.as_numpy_array(rp.horizontally_concatenated_videos(rp.as_numpy_images(arr_corrupt), rp.as_numpy_images(arr))) / 2 + .5,
+            rp.make_directory(rp.get_parent_folder(str(recon_imgs_fn))+"/image_files"),
+        )
+
+        log.info(f"Saved images:{saved_paths}")
+
     dist.barrier()
 
-    log.info(f"Sampling complete! Collect recon_imgs={arr.shape}, ys={label_arr.shape}")
+    # log.info(f"Sampling complete! Collect recon_imgs={arr.shape}, ys={label_arr.shape}")
+    log.info(f"Sampling complete! Collect recon_imgs={arr.shape}")
 
 
 if __name__ == '__main__':
