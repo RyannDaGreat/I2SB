@@ -143,3 +143,4 @@ results/*
 *.swp
 *.un~
 #<RP Default Gitignore End>
+downloaded_datasets/imagenet_stuff
