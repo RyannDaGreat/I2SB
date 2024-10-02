@@ -14,6 +14,59 @@ from .util import unsqueeze_xdim
 
 from ipdb import set_trace as debug
 
+import rp
+
+import torch
+import numpy
+
+import einops
+
+@rp.memoized
+def cached_randn(device,dtype):
+    # path = "/root/micromamba/envs/i2sb/lib/python3.8/site-packages/rp/git/CommonSource/notebooks/NoiseWarpOutputs/Bear/noises.npy"
+    # path = "/efs/users/ryan.burgert/public/I2SB_With_Checkpoints/downloaded_datasets/videos/bear/warped_noise/noises.npy"
+    path = "/efs/users/ryan.burgert/public/I2SB_With_Checkpoints/downloaded_datasets/videos/bear/warped_noise_1x/noises.npy"
+    path = "/efs/users/ryan.burgert/public/I2SB_With_Checkpoints/downloaded_datasets/videos/bear/warped_noise_8x_xy4_1step_copy2/noises.npy"
+    path = "/efs/users/ryan.burgert/public/I2SB_With_Checkpoints/downloaded_datasets/videos/bear/warped_noise_8x_xy4_15step_copy1/noises.npy"
+    path = "/efs/users/ryan.burgert/public/I2SB_With_Checkpoints/downloaded_datasets/videos/bear/warped_noise_32x_4step_copy/noises.npy"
+
+    path = "/efs/users/ryan.burgert/public/I2SB_With_Checkpoints/downloaded_datasets/videos/kevin_spin/warped_noise/noises.npy"
+    
+    rp.fansi_print("LOADING NOISE FROM PATH: "+path,'yellow','bold')
+    return torch.tensor(einops.rearrange(
+        numpy.load(path),
+        'T H W C -> 1 (T C) H W',
+    )).to(device).to(dtype)
+    return torch.randn(shape,device=device,dtype=dtype)
+
+
+INDEX=0
+def randn_like(x):
+    global INDEX
+    #CALLED ONCE PER DDPM STEP
+    #x is in BCHW form.
+    print("RANDN INDEX",INDEX)
+
+    b,c,h,w=x.shape
+    assert h==w==256
+
+    base=cached_randn(x.device,x.dtype)
+
+    orth=base.roll(-INDEX, dims=1)
+
+    out=orth[:,:3,:,:]
+
+    assert out.shape==(1,3,256,256)
+    assert x.shape==out.shape
+
+    INDEX+=3
+    INDEX %= 3 * 50 #UNCOMMENT FOR FIXED NOISE
+
+    return out
+
+    # # print("USING RANDOMNESS WITH SHAPE",x.shape) #USING RANDOMNESS WITH SHAPE torch.Size([1, 3, 256, 256])
+    # return cached_randn(x.shape,device=x.device,dtype=x.dtype)
+
 def compute_gaussian_product_coef(sigma1, sigma2):
     """ Given p1 = N(x_t|x_0, sigma_1**2) and p2 = N(x_t|x_1, sigma_2**2)
         return p1 * p2 = N(x_t| coef1 * x0 + coef2 * x1, var) """
@@ -60,7 +113,7 @@ class Diffusion():
 
         xt = mu_x0 * x0 + mu_x1 * x1
         if not ot_ode:
-            xt = xt + std_sb * torch.randn_like(xt)
+            xt = xt + std_sb * randn_like(xt)
         return xt.detach()
 
     def p_posterior(self, nprev, n, x_n, x0, ot_ode=False):
@@ -75,7 +128,7 @@ class Diffusion():
 
         xt_prev = mu_x0 * x0 + mu_xn * x_n
         if not ot_ode and nprev > 0:
-            xt_prev = xt_prev + var.sqrt() * torch.randn_like(xt_prev)
+            xt_prev = xt_prev + var.sqrt() * randn_like(xt_prev)
 
         return xt_prev
 
@@ -99,11 +152,12 @@ class Diffusion():
             xt = self.p_posterior(prev_step, step, xt, pred_x0, ot_ode=ot_ode)
 
             if mask is not None:
+                assert False, "MASK SHOULD BE NONE"
                 xt_true = x1
                 if not ot_ode:
                     _prev_step = torch.full((xt.shape[0],), prev_step, device=self.device, dtype=torch.long)
                     std_sb = unsqueeze_xdim(self.std_sb[_prev_step], xdim=x1.shape[1:])
-                    xt_true = xt_true + std_sb * torch.randn_like(xt_true)
+                    xt_true = xt_true + std_sb * randn_like(xt_true)
                 xt = (1. - mask) * xt_true + mask * xt
 
             if prev_step in log_steps:

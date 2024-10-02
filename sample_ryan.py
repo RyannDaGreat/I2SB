@@ -163,10 +163,13 @@ def main(opt):
     # val_dataset = build_val_dataset(opt, log, corrupt_type)
     val_dataset = [
         'https://upload.wikimedia.org/wikipedia/commons/6/67/Kim_Petras_%2842743719761%29.jpg',
-        'https://media.npr.org/assets/img/2023/07/06/kim-petras---credit-luke-gilford_wide-8bbaafdd1a30bd518d7da2791a81179de2099127.jpg',
-        'https://static.wikia.nocookie.net/kim-petras/images/1/12/F5XuxfnbwAAgu8L.jpg/revision/latest?cb=20231117000449',
+        # 'https://media.npr.org/assets/img/2023/07/06/kim-petras---credit-luke-gilford_wide-8bbaafdd1a30bd518d7da2791a81179de2099127.jpg',
+        # 'https://static.wikia.nocookie.net/kim-petras/images/1/12/F5XuxfnbwAAgu8L.jpg/revision/latest?cb=20231117000449',
     ]
+    val_dataset = rp.get_all_image_files("/efs/users/ryan.burgert/public/I2SB_With_Checkpoints/downloaded_datasets/videos/bear/frames")
+    val_dataset = rp.get_all_image_files("/efs/users/ryan.burgert/public/I2SB_With_Checkpoints/downloaded_datasets/videos/kevin_spin/frames/")
     n_samples = len(val_dataset)
+
 
     # build dataset per gpu and loader
     subset_dataset = build_subset_per_gpu(opt, val_dataset, log)
@@ -183,6 +186,8 @@ def main(opt):
         runner.net.diffusion_model.convert_to_fp16()
         runner.ema = ExponentialMovingAverage(runner.net.parameters(), decay=0.99) # re-init ema with fp16 weight
 
+    ic(opt)
+
     # create save folder
     recon_imgs_fn = get_recon_imgs_fn(opt, nfe)
     log.info(f"Recon images will be saved to {recon_imgs_fn}!")
@@ -191,6 +196,9 @@ def main(opt):
     corrupt_imgs = []
     ys = []
     num = 0
+
+    assert opt.global_rank == 0, 'RYAN: Please only run this with ONE gpu at a time to sync frames with the loaded noise.'
+
     for loader_itr, out in enumerate(val_loader):
 
         corrupt_img, x1, mask, cond, y = compute_batch(ckpt_opt, corrupt_type, corrupt_method, out)
@@ -238,9 +246,19 @@ def main(opt):
         torch.save({"arr": arr}, recon_imgs_fn)
         log.info(f"Save at {recon_imgs_fn}")
 
+        vis_images_folder = rp.make_directory(rp.get_parent_folder(str(recon_imgs_fn)) + "/image_files")
+
+        vis_images = rp.as_numpy_array(
+            rp.horizontally_concatenated_videos(
+                rp.as_numpy_images(arr_corrupt),
+                rp.as_numpy_images(arr),
+            )
+        )
+        vis_images = vis_images / 2 + 0.5
+
         saved_paths = rp.save_images(
-            rp.as_numpy_array(rp.horizontally_concatenated_videos(rp.as_numpy_images(arr_corrupt), rp.as_numpy_images(arr))) / 2 + .5,
-            rp.make_directory(rp.get_parent_folder(str(recon_imgs_fn))+"/image_files"),
+            vis_images,
+            vis_images_folder,
         )
 
         log.info(f"Saved images:{saved_paths}")
